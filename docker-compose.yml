@@ -118,7 +118,7 @@ services:
         VITE_WS_URL: "ws://localhost:8080/ws"
         VITE_API_URL: "http://localhost:8080"
     ports:
-      - "3000:80"
+      - "3000:8080"
     depends_on:
       - wsserver
     networks:

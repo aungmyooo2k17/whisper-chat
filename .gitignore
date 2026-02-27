@@ -17,6 +17,7 @@ frontend/build/
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # IDE / Editor
 .vscode/

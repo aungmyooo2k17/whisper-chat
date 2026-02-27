@@ -1,6 +1,6 @@
 # Project Kanban -- Whisper (Anonymous Real-Time Chat)
 
-> Last updated: 2026-02-28 (Sprint 10 complete)
+> Last updated: 2026-02-28 (Sprint 12 complete)
 > Target: 1,000,000 concurrent WebSocket connections
 > Environment: Local development via Docker Compose
 > Epics: 9 | Total tasks: 80 | MVP tasks: 41 | First release tasks: 73
@@ -209,7 +209,7 @@
 
 > Tasks with no blockers or whose blockers are all Done.
 
-_(empty — Sprint 11 tasks LOAD-7 and LOAD-8 are next)_
+_(empty — Sprint 13 tasks RELEASE-6 and RELEASE-7 are next)_
 
 ---
 
@@ -298,6 +298,13 @@ _(empty)_
 - [x] **LOAD-6** [infra][M] Metrics collection — Prometheus scraper, Grafana load test dashboard (Sprint 10)
 - [x] **LOAD-3** [infra][M] Matching flow load test — connect all, batch find_match, accept_match, latency tracking (Sprint 10)
 - [x] **LOAD-4** [infra][L] Full chat lifecycle load test — connect → match → chat messages → end_chat (Sprint 10)
+- [x] **LOAD-7** [infra][L] Tiered benchmark scripts — run-tier.sh, thresholds.yaml, compare.sh for 10K→1M (Sprint 11)
+- [x] **LOAD-8** [infra][M] Performance tuning playbook — bottleneck analysis, tuning parameters, scaling strategies (Sprint 11)
+- [x] **RELEASE-1** [infra][S] Frontend Dockerfile hardened — non-root nginx, healthcheck, CSP, rate limiting (Sprint 12)
+- [x] **RELEASE-2** [infra][M] Production Docker Compose — resource limits, dual networks, multi-instance wsserver, JSON logging (Sprint 12)
+- [x] **RELEASE-3** [infra][M] Production HAProxy — SSL termination, WebSocket routing, rate limiting, connection draining (Sprint 12)
+- [x] **RELEASE-4** [infra][S] Environment docs — .env.example + .env.production.example with all variables (Sprint 12)
+- [x] **RELEASE-5** [infra][M] E2E integration test — 7 scenarios covering health, connect, match, chat, end, rate limit, content filter (Sprint 12)
 
 ---
 
@@ -494,12 +501,12 @@ Sprint 7:      Abuse prevention ✅ DONE (8 tasks)
 Sprint 8:      Reporting + mod  ✅ DONE (8 tasks)
 Sprint 9:      Polish + monitor ✅ DONE (6 tasks)
 Sprint 10:     Load testing     ✅ DONE (6 tasks)
-Sprint 11:     Scale testing     2 tasks
-Sprint 12:     Release prep      5 tasks
+Sprint 11:     Scale testing    ✅ DONE (2 tasks)
+Sprint 12:     Release prep     ✅ DONE (5 tasks)
 Sprint 13:     Ship it           3 tasks
 ────────────────────────────────────────
 Total:         13 sprints, 76 tasks (+ 4 skipped for v2)
-               66 done, 10 remaining
+               73 done, 3 remaining
 ```
 
 **Tasks deferred to v2.0** (not needed for first release):

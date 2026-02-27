@@ -3,3 +3,13 @@ build
 .svelte-kit
 .env
 .env.*
+.git
+.gitignore
+Dockerfile
+.dockerignore
+*.md
+dist
+coverage
+.vscode
+.idea
+*.log

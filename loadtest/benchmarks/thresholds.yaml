@@ -1,0 +1,81 @@
+# =============================================================================
+# Whisper Benchmark Performance Thresholds
+# =============================================================================
+# Expected performance targets per tier. These thresholds are used as
+# guidelines when evaluating benchmark results. A regression is flagged
+# when a metric exceeds its threshold by more than 10%.
+#
+# Latency values are in milliseconds unless otherwise noted.
+# Memory and CPU values represent server-side resource usage.
+# =============================================================================
+
+tiers:
+  10k:
+    connections: 10000
+    connect_p99_ms: 50
+    match_p99_ms: 5000
+    msg_p99_ms: 100
+    error_rate_pct: 1.0
+    expected_memory_gb: 2
+    expected_cpu_cores: 2
+    notes: >
+      Baseline tier for development and single-machine validation.
+      Should run comfortably on a 4-core, 8GB machine. Kernel tuning
+      is recommended but not strictly required at this level.
+
+  100k:
+    connections: 100000
+    connect_p99_ms: 100
+    match_p99_ms: 8000
+    msg_p99_ms: 200
+    error_rate_pct: 2.0
+    expected_memory_gb: 8
+    expected_cpu_cores: 4
+    notes: >
+      Pre-production baseline. Requires kernel tuning on both server
+      and client machines. Client needs expanded ephemeral port range
+      (or multiple source IPs if targeting a single server endpoint).
+      Run on dedicated hardware to avoid noisy-neighbor effects.
+
+  500k:
+    connections: 500000
+    connect_p99_ms: 250
+    match_p99_ms: 12000
+    msg_p99_ms: 500
+    error_rate_pct: 3.0
+    expected_memory_gb: 24
+    expected_cpu_cores: 8
+    notes: >
+      Production capacity test. Requires multiple source IPs on the
+      load test client (at least 8 IPs for ~500K connections). Server
+      must have kernel tuning applied. Expect higher tail latencies
+      due to GC pressure and memory allocation patterns. Monitor
+      server CPU and memory closely during the hold phase.
+
+  1m:
+    connections: 1000000
+    connect_p99_ms: 500
+    match_p99_ms: 20000
+    msg_p99_ms: 1000
+    error_rate_pct: 5.0
+    expected_memory_gb: 48
+    expected_cpu_cores: 16
+    notes: >
+      Maximum capacity stress test. Requires 16+ source IPs on the
+      load test client machine. Server must be on dedicated bare-metal
+      or a large cloud instance (e.g., c5.4xlarge or higher). Both
+      server and client need full kernel tuning. Expect elevated error
+      rates and tail latencies. The primary goal is to find the
+      breaking point and characterize degradation patterns. A 5%
+      error rate at this tier is acceptable; focus on whether errors
+      are transient (recoverable) or cascading (server instability).
+
+# =============================================================================
+# Resource requirements summary (client-side)
+# =============================================================================
+# Tier   | Client RAM | Client CPU | Source IPs | ulimit -n
+# -------|------------|------------|------------|----------
+# 10k    | 1 GB       | 2 cores    | 1          | 12000
+# 100k   | 6 GB       | 4 cores    | 2          | 110000
+# 500k   | 20 GB      | 8 cores    | 8          | 510000
+# 1m     | 40 GB      | 16 cores   | 16         | 1100000
