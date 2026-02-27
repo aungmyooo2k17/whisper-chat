@@ -1,0 +1,64 @@
+{
+  "mcpServers": {
+
+    "// DOCUMENTATION =====================================": "",
+
+    "context7": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "context7-mcp"],
+      "disabled": true,
+      "_description": "Documentation lookup for libraries/frameworks"
+    },
+
+    "// DATABASES =========================================": "",
+
+    "postgres": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "mcp/postgres",
+        "postgresql://USER:PASSWORD@HOST:5432/DATABASE"
+      ],
+      "disabled": true,
+      "_description": "PostgreSQL database access"
+    },
+
+    "// FILESYSTEM ========================================": "",
+
+    "filesystem": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--mount", "type=bind,src=/path/to/project,dst=/projects",
+        "mcp/filesystem",
+        "/projects"
+      ],
+      "disabled": true,
+      "_description": "Extended file operations"
+    },
+
+    "// REASONING =========================================": "",
+
+    "sequentialthinking": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "mcp/sequentialthinking"],
+      "disabled": true,
+      "_description": "Enhanced multi-step reasoning"
+    },
+
+    "// SEO & ANALYTICS ====================================": "",
+
+    "gsc": {
+      "command": "node",
+      "args": [
+        "/path/to/mcp-server-gsc/dist/index.js"
+      ],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/gsc-credentials.json",
+        "GSC_PROPERTY": "sc-domain:example.com"
+      },
+      "disabled": true,
+      "_description": "Google Search Console - SEO analytics and search performance"
+    }
+  }
+}

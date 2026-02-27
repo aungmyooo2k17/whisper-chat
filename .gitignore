@@ -1,0 +1,35 @@
+# Go build artifacts
+bin/
+
+# Go test and tool output
+*.test
+*.out
+coverage.html
+
+# Frontend
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes (local dev)
+docker-data/
+
+# Temporary files
+*.tmp
+*.log

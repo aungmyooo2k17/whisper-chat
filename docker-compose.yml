@@ -1,0 +1,116 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - whisper-net
+
+  nats:
+    image: nats:2-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "--js -m 8222"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - whisper-net
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: whisper
+      POSTGRES_USER: whisper
+      POSTGRES_PASSWORD: whisper_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U whisper -d whisper"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - whisper-net
+
+  haproxy:
+    image: haproxy:3.0-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - wsserver
+    networks:
+      - whisper-net
+
+  wsserver:
+    build:
+      context: .
+      dockerfile: cmd/wsserver/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - LISTEN_ADDR=:8080
+      - REDIS_ADDR=redis:6379
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - whisper-net
+
+  matcher:
+    build:
+      context: .
+      dockerfile: cmd/matcher/Dockerfile
+    environment:
+      - REDIS_ADDR=redis:6379
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - whisper-net
+
+  moderator:
+    build:
+      context: .
+      dockerfile: cmd/moderator/Dockerfile
+    environment:
+      - REDIS_ADDR=redis:6379
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - whisper-net
+
+volumes:
+  redis-data:
+  postgres-data:
+
+networks:
+  whisper-net:
+    driver: bridge
