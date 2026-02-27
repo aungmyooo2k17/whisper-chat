@@ -12,12 +12,13 @@ import (
 // Connection represents a single WebSocket client connection with its
 // associated metadata and a write mutex for serializing outbound frames.
 type Connection struct {
-	ID        string    // session ID (UUID)
-	Conn      net.Conn  // underlying TCP connection
-	Fd        int       // file descriptor for epoll lookups
-	CreatedAt time.Time // when the connection was established
-	LastPing  time.Time // last heartbeat received from the client
-	writeMu   sync.Mutex // serializes writes to this connection
+	ID         string    // session ID (UUID)
+	Conn       net.Conn  // underlying TCP connection
+	Fd         int       // file descriptor for epoll lookups
+	CreatedAt  time.Time // when the connection was established
+	LastPing   time.Time // last heartbeat received from the client
+	writeMu    sync.Mutex // serializes writes to this connection
+	processing int32      // atomic flag: 0 = idle, 1 = being read by handleConn
 }
 
 // WriteMessage sends a WebSocket text frame to this connection. The write

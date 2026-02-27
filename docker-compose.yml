@@ -51,7 +51,7 @@ services:
   haproxy:
     image: haproxy:3.0-alpine
     ports:
-      - "80:80"
+      - "8088:80"
     volumes:
       - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:

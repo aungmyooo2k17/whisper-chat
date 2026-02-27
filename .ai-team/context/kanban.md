@@ -1,6 +1,6 @@
 # Project Kanban -- Whisper (Anonymous Real-Time Chat)
 
-> Last updated: 2026-02-27 (Sprint 6 complete)
+> Last updated: 2026-02-28 (Sprint 6 complete, BUG-1 fixed)
 > Target: 1,000,000 concurrent WebSocket connections
 > Environment: Local development via Docker Compose
 > Epics: 9 | Total tasks: 80 | MVP tasks: 41 | First release tasks: 73
@@ -220,13 +220,7 @@
 
 ## In Progress
 
-- [ ] **BUG-1** [bug][M] WebSocket connections drop through Vite proxy causing false `partner_left`
-  - **Symptoms**: Browser shows "Your partner left" immediately after first message; rapid connect/disconnect cycles on page load (3 reconnections in 3 seconds)
-  - **Root cause (suspected)**: Vite dev server WebSocket proxy (`ws: true` in `vite.config.ts`) is unstable for long-lived WebSocket connections. Connections are dropped at the TCP level (not via `end_chat`), triggering the `onDisconnect` handler which publishes `partner_left`.
-  - **Evidence**: Backend E2E test with raw WebSocket clients passes 15/15 (no proxy). Server logs confirm `[disconnect]` fires for a session still in `status=chatting` with an active `chat_id`, 1 second after last message exchange. No `end_chat` message was sent by the client.
-  - **Logs**: Session creates, matches, chats successfully → TCP disconnect at server level → `onDisconnect` publishes `partner_left` → partner receives false "partner left"
-  - **Files**: `frontend/vite.config.ts` (proxy config), `internal/ws/server.go` (disconnect handling), `cmd/wsserver/main.go` (logging added)
-  - **Fix options**: (1) Bypass Vite proxy — connect browser directly to `ws://localhost:8080/ws`, (2) Fix Vite proxy config (`changeOrigin`, timeouts), (3) Investigate if `gobwas/ws` + epoll mishandles WebSocket pong frames from browser causing read errors
+_(empty)_
 
 ---
 
@@ -276,6 +270,11 @@ _(empty)_
 - [x] **FE-5** [feature][L] Chat screen (Sprint 6)
 - [x] **FE-8** [feature][S] Partner left / chat ended UI states (Sprint 6)
 - [x] **FE-10** [feature][M] Responsive mobile-first CSS (Sprint 6)
+- [x] **BUG-1** [bug][M] WebSocket false `partner_left` — three root causes fixed (Sprint 6)
+  - Fix 1: Replaced `wsutil.ReadClientData` with `wsutil.NextReader` for per-frame control frame handling
+  - Fix 2: Cleared stale `WriteDeadline` after `SendMessage` to prevent heartbeat ping write failures
+  - Fix 3: Treated read timeouts from stale epoll dispatches as harmless (return, don't `RemoveConnection`)
+  - Also: Bypassed Vite proxy via `VITE_WS_URL`, improved Vite proxy config, bumped Dockerfiles to Go 1.24
 
 ---
 

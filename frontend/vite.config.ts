@@ -7,7 +7,13 @@ export default defineConfig({
 		proxy: {
 			'/ws': {
 				target: 'http://localhost:8080',
-				ws: true
+				ws: true,
+				changeOrigin: true,
+				configure: (proxy) => {
+					proxy.on('error', (err) => {
+						console.log('[vite-proxy] WebSocket proxy error:', err.message);
+					});
+				}
 			}
 		}
 	}

@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gobwas/ws"
@@ -234,39 +236,67 @@ func (s *Server) startEventLoop() {
 	}
 }
 
-// handleConn reads a single WebSocket message from a ready connection. If the
-// read fails (connection closed, protocol error, etc.) the connection is
-// removed from epoll and the connection manager.
+// handleConn reads a single WebSocket frame from a ready connection using
+// wsutil.NextReader so that control frames (ping, pong) are handled without
+// blocking on a data frame that may never arrive. If the read fails
+// (connection closed, protocol error, etc.) the connection is removed from
+// epoll and the connection manager.
 func (s *Server) handleConn(netConn net.Conn) {
-	// Look up the Connection object by the underlying net.Conn.
 	c := s.conns.GetByConn(netConn)
 	if c == nil {
-		// Connection was already removed (race with Remove).
 		return
 	}
 
-	// Set read deadline.
+	// Guard against duplicate dispatch from level-triggered epoll.
+	if !atomic.CompareAndSwapInt32(&c.processing, 0, 1) {
+		return
+	}
+	defer atomic.StoreInt32(&c.processing, 0)
+
 	if s.config.ReadTimeout > 0 {
 		_ = netConn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout))
 	}
 
-	// Read the WebSocket frame. wsutil handles frame reassembly.
-	data, _, err := wsutil.ReadClientData(netConn)
+	header, reader, err := wsutil.NextReader(netConn, ws.StateServerSide)
 	if err != nil {
-		// Connection closed or read error — clean up.
+		// A read timeout means no data was available (stale epoll dispatch).
+		// Don't kill the connection — the heartbeat handles dead connections.
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return
+		}
 		s.RemoveConnection(c)
 		return
 	}
 
-	// A successful read proves the connection is alive. Update LastPing so
-	// the heartbeat monitor knows this connection is still active.
+	// Clear read deadline after successful frame read.
+	_ = netConn.SetReadDeadline(time.Time{})
+
+	// Any frame proves the connection is alive.
 	c.LastPing = time.Now()
+
+	// Handle control frames without removing the connection.
+	if header.OpCode.IsControl() {
+		if header.OpCode == ws.OpClose {
+			s.RemoveConnection(c)
+		}
+		// Pong/ping: connection is alive, nothing else to do.
+		return
+	}
+
+	// Read data frame payload.
+	data := make([]byte, header.Length)
+	if header.Length > 0 {
+		_, err = io.ReadFull(reader, data)
+		if err != nil {
+			s.RemoveConnection(c)
+			return
+		}
+	}
 
 	if len(data) == 0 {
 		return
 	}
 
-	// Dispatch to the application-level message handler.
 	if s.onMessage != nil {
 		s.onMessage(c, data)
 	}
@@ -321,7 +351,12 @@ func (s *Server) SendMessage(connID string, data []byte) error {
 		_ = c.Conn.SetWriteDeadline(time.Now().Add(s.config.WriteTimeout))
 	}
 
-	return c.WriteMessage(data)
+	err := c.WriteMessage(data)
+
+	// Clear write deadline so it doesn't affect future writes (e.g., heartbeat pings).
+	_ = c.Conn.SetWriteDeadline(time.Time{})
+
+	return err
 }
 
 // Connections returns the ConnectionManager for external access to connection
