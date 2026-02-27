@@ -1,5 +1,7 @@
 # Go build artifacts
 bin/
+wsserver
+loadtest/loadtest
 
 # Go test and tool output
 *.test
