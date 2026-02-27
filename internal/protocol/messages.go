@@ -14,15 +14,16 @@ import (
 
 // Client -> Server message types.
 const (
-	TypeFindMatch    = "find_match"
-	TypeCancelMatch  = "cancel_match"
-	TypeAcceptMatch  = "accept_match"
-	TypeDeclineMatch = "decline_match"
-	TypeMessage      = "message"
-	TypeTyping       = "typing"
-	TypeEndChat      = "end_chat"
-	TypeReport       = "report"
-	TypePing         = "ping"
+	TypeSetFingerprint = "set_fingerprint"
+	TypeFindMatch      = "find_match"
+	TypeCancelMatch    = "cancel_match"
+	TypeAcceptMatch    = "accept_match"
+	TypeDeclineMatch   = "decline_match"
+	TypeMessage        = "message"
+	TypeTyping         = "typing"
+	TypeEndChat        = "end_chat"
+	TypeReport         = "report"
+	TypePing           = "ping"
 )
 
 // Server -> Client message types.
@@ -76,6 +77,13 @@ func (e *Envelope) UnmarshalJSON(data []byte) error {
 // ---------------------------------------------------------------------------
 // Client -> Server message structs
 // ---------------------------------------------------------------------------
+
+// SetFingerprintMsg is sent by the client to associate a browser fingerprint
+// hash with the current session for ban enforcement.
+type SetFingerprintMsg struct {
+	Type        string `json:"type"`
+	Fingerprint string `json:"fingerprint"`
+}
 
 // FindMatchMsg is sent by the client to enter the matching queue with optional
 // interest tags.
@@ -241,6 +249,10 @@ func ParseClientMessage(data []byte) (string, interface{}, error) {
 	)
 
 	switch env.Type {
+	case TypeSetFingerprint:
+		var m SetFingerprintMsg
+		err = json.Unmarshal(env.Raw, &m)
+		msg = m
 	case TypeFindMatch:
 		var m FindMatchMsg
 		err = json.Unmarshal(env.Raw, &m)

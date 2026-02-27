@@ -2,19 +2,29 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	_ "github.com/lib/pq"
+
+	"github.com/whisper/chat-app/internal/ban"
 	"github.com/whisper/chat-app/internal/chat"
+	"github.com/whisper/chat-app/internal/database"
 	"github.com/whisper/chat-app/internal/matching"
 	"github.com/whisper/chat-app/internal/messaging"
+	"github.com/whisper/chat-app/internal/metrics"
+	"github.com/whisper/chat-app/internal/moderation"
 	"github.com/whisper/chat-app/internal/protocol"
+	"github.com/whisper/chat-app/internal/ratelimit"
+	"github.com/whisper/chat-app/internal/report"
 	"github.com/whisper/chat-app/internal/session"
 	"github.com/whisper/chat-app/internal/ws"
 )
@@ -75,6 +85,40 @@ func main() {
 	}
 
 	chatStore := chat.NewStore(sessionStore.Client())
+	banStore := ban.NewStore(sessionStore.Client())
+	msgBuffer := chat.NewMessageBuffer()
+
+	// --- Rate Limiter ---
+	rateLimiter := ratelimit.NewLimiter(sessionStore.Client())
+
+	// --- Content Filter ---
+	contentFilter := moderation.NewFilter()
+	log.Printf("  content_filter: loaded")
+
+	// --- PostgreSQL ---
+	databaseURL := "postgres://whisper:whisper_dev@localhost:5432/whisper?sslmode=disable"
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		databaseURL = v
+	}
+
+	// Resolve migrations path relative to the working directory.
+	migrationsPath, err := filepath.Abs("migrations")
+	if err != nil {
+		log.Fatalf("failed to resolve migrations path: %v", err)
+	}
+	if err := database.RunMigrations(databaseURL, migrationsPath); err != nil {
+		log.Fatalf("failed to run database migrations: %v", err)
+	}
+	log.Printf("database migrations applied successfully")
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		log.Fatalf("failed to open database connection: %v", err)
+	}
+	if err := db.Ping(); err != nil {
+		log.Fatalf("failed to ping database: %v", err)
+	}
+	reportStore := report.NewStore(db)
 
 	log.Printf("Whisper WebSocket server starting")
 	log.Printf("  listen_addr:     %s", config.ListenAddr)
@@ -84,6 +128,7 @@ func main() {
 	log.Printf("  write_timeout:   %s", config.WriteTimeout)
 	log.Printf("  nats_url:        %s", natsConfig.URL)
 	log.Printf("  redis_addr:      %s", redisAddr)
+	log.Printf("  database_url:    %s", databaseURL)
 	log.Printf("  server_name:     %s", serverName)
 
 	// Declare server early so closures can capture it.
@@ -113,6 +158,8 @@ func main() {
 				})
 				if err := server.SendMessage(localSID, resp); err != nil {
 					log.Printf("[chat-sub] send message to %s failed: %v", localSID, err)
+				} else {
+					metrics.MessagesTotal.WithLabelValues("received").Inc()
 				}
 
 			case "typing":
@@ -136,6 +183,49 @@ func main() {
 	dispatcher := ws.NewMessageDispatcher(nil)
 
 	// -----------------------------------------------------------------------
+	// set_fingerprint — associate browser fingerprint with session (ABUSE-4)
+	// Ban check on fingerprint submission (ABUSE-5)
+	// -----------------------------------------------------------------------
+	dispatcher.Register(protocol.TypeSetFingerprint, func(conn *ws.Connection, msg interface{}) {
+		fpMsg, ok := msg.(protocol.SetFingerprintMsg)
+		if !ok {
+			return
+		}
+		sid := conn.ID
+		ctx := context.Background()
+
+		if fpMsg.Fingerprint == "" {
+			return
+		}
+
+		if err := sessionStore.SetFingerprint(ctx, sid, fpMsg.Fingerprint); err != nil {
+			log.Printf("set_fingerprint: failed for session=%s: %v", sid, err)
+			return
+		}
+
+		// ABUSE-5: Check if fingerprint is banned.
+		banned, remaining, reason, err := banStore.IsBanned(ctx, fpMsg.Fingerprint)
+		if err != nil {
+			log.Printf("[ban] check error for session=%s: %v", sid, err)
+			return // fail open — let the user through on Redis errors
+		}
+		if banned {
+			log.Printf("[ban] session=%s fingerprint=%s is banned (remaining=%ds reason=%s)",
+				sid, fpMsg.Fingerprint, remaining, reason)
+			resp, _ := protocol.NewServerMessage(protocol.TypeBanned, protocol.BannedMsg{
+				Duration: remaining,
+				Reason:   reason,
+			})
+			conn.WriteMessage(resp)
+			// Disconnect after sending ban notification.
+			server.RemoveConnection(conn)
+			return
+		}
+
+		log.Printf("set_fingerprint session=%s", sid)
+	})
+
+	// -----------------------------------------------------------------------
 	// find_match — enter matching queue
 	// -----------------------------------------------------------------------
 	dispatcher.Register(protocol.TypeFindMatch, func(conn *ws.Connection, msg interface{}) {
@@ -145,6 +235,23 @@ func main() {
 		}
 		sid := conn.ID
 		ctx := context.Background()
+
+		// ABUSE-1: Rate limit match requests (10 per minute per session).
+		if allowed, _ := rateLimiter.Allow(ctx, sid, ratelimit.RuleMatch); !allowed {
+			log.Printf("[ratelimit] find_match rejected session=%s", sid)
+			resp, _ := protocol.NewServerMessage(protocol.TypeRateLimited, protocol.RateLimitedMsg{
+				RetryAfter: int(ratelimit.RuleMatch.Window.Seconds()),
+			})
+			conn.WriteMessage(resp)
+			return
+		}
+
+		// ABUSE-2: Filter offensive interest tags.
+		cleanInterests := contentFilter.CheckInterests(findMsg.Interests)
+		if len(cleanInterests) != len(findMsg.Interests) {
+			log.Printf("[filter] interests filtered session=%s original=%d clean=%d", sid, len(findMsg.Interests), len(cleanInterests))
+		}
+		findMsg.Interests = cleanInterests
 
 		interests := strings.Join(findMsg.Interests, ",")
 		sessionStore.SetInterests(ctx, sid, interests)
@@ -191,6 +298,22 @@ func main() {
 						// Partner accepted (we're the first accepter).
 						subscribeToChatNATS(sid, notif.ChatID)
 						sessionStore.SetChatID(bgCtx, sid, notif.ChatID)
+						// MOD-2: Subscribe to async moderation results for this session.
+						natsClient.SubscribeModerationResult(sid, func(data []byte) {
+							var modResult moderation.ModerationResult
+							if err := json.Unmarshal(data, &modResult); err != nil {
+								return
+							}
+							if !modResult.Blocked {
+								return
+							}
+							log.Printf("[moderation] async flag session=%s chat=%s reason=%s", sid, modResult.ChatID, modResult.Reason)
+							warnResp, _ := protocol.NewServerMessage(protocol.TypeError, protocol.ErrorMsg{
+								Code:    "content_warning",
+								Message: "Your message was flagged by our moderation system",
+							})
+							server.SendMessage(sid, warnResp)
+						})
 						resp, _ := protocol.NewServerMessage(protocol.TypeMatchAccepted, protocol.MatchAcceptedMsg{
 							ChatID: notif.ChatID,
 						})
@@ -261,8 +384,25 @@ func main() {
 		switch result {
 		case 1:
 			// Both accepted — activate chat.
+			metrics.ActiveChats.Inc()
 			subscribeToChatNATS(sid, chatID)
 			sessionStore.SetChatID(ctx, sid, chatID)
+			// MOD-2: Subscribe to async moderation results for this session.
+			natsClient.SubscribeModerationResult(sid, func(data []byte) {
+				var modResult moderation.ModerationResult
+				if err := json.Unmarshal(data, &modResult); err != nil {
+					return
+				}
+				if !modResult.Blocked {
+					return
+				}
+				log.Printf("[moderation] async flag session=%s chat=%s reason=%s", sid, modResult.ChatID, modResult.Reason)
+				warnResp, _ := protocol.NewServerMessage(protocol.TypeError, protocol.ErrorMsg{
+					Code:    "content_warning",
+					Message: "Your message was flagged by our moderation system",
+				})
+				server.SendMessage(sid, warnResp)
+			})
 
 			resp, _ := protocol.NewServerMessage(protocol.TypeMatchAccepted, protocol.MatchAcceptedMsg{
 				ChatID: chatID,
@@ -337,10 +477,32 @@ func main() {
 		sid := conn.ID
 		ctx := context.Background()
 
+		// ABUSE-1: Rate limit messages (5 per 10 seconds per session).
+		if allowed, _ := rateLimiter.Allow(ctx, sid, ratelimit.RuleMessage); !allowed {
+			log.Printf("[ratelimit] message rejected session=%s", sid)
+			resp, _ := protocol.NewServerMessage(protocol.TypeRateLimited, protocol.RateLimitedMsg{
+				RetryAfter: int(ratelimit.RuleMessage.Window.Seconds()),
+			})
+			conn.WriteMessage(resp)
+			return
+		}
+
 		// CHAT-7: Validate message content.
 		if err := chat.ValidateMessage(chatMsg.Text); err != nil {
 			errResp, _ := protocol.NewServerMessage(protocol.TypeError, protocol.ErrorMsg{
 				Code: "invalid_message", Message: err.Error(),
+			})
+			conn.WriteMessage(errResp)
+			return
+		}
+
+		// ABUSE-2: Content filter check.
+		if result := contentFilter.Check(chatMsg.Text); result.Blocked {
+			metrics.MessagesTotal.WithLabelValues("blocked").Inc()
+			log.Printf("[filter] message blocked session=%s reason=%s term=%s", sid, result.Reason, result.Term)
+			errResp, _ := protocol.NewServerMessage(protocol.TypeError, protocol.ErrorMsg{
+				Code:    "message_blocked",
+				Message: "Message contains prohibited content",
 			})
 			conn.WriteMessage(errResp)
 			return
@@ -361,16 +523,35 @@ func main() {
 		}
 
 		log.Printf("[message] session=%s chat=%s text_len=%d", sid, chatMsg.ChatID, len(chatMsg.Text))
+		metrics.MessagesTotal.WithLabelValues("sent").Inc()
 
 		// CHAT-2: Publish message via NATS for delivery to partner.
+		now := time.Now().Unix()
 		event := chat.ChatEvent{
 			Type: "message",
 			From: sid,
 			Text: chatMsg.Text,
-			Ts:   time.Now().Unix(),
+			Ts:   now,
 		}
 		data, _ := json.Marshal(event)
 		natsClient.PublishChatMessage(chatMsg.ChatID, data)
+
+		// MOD-6: Buffer message for report context.
+		msgBuffer.Add(chatMsg.ChatID, chat.BufferedMessage{
+			From: sid,
+			Text: chatMsg.Text,
+			Ts:   now,
+		})
+
+		// MOD-2: Async moderation check via NATS.
+		modReq := moderation.ModerationRequest{
+			SessionID: sid,
+			ChatID:    chatMsg.ChatID,
+			Text:      chatMsg.Text,
+			Ts:        now,
+		}
+		modData, _ := json.Marshal(modReq)
+		natsClient.PublishModerationRequest(modData)
 	})
 
 	// -----------------------------------------------------------------------
@@ -414,19 +595,138 @@ func main() {
 		data, _ := json.Marshal(event)
 		natsClient.PublishChatMessage(chatID, data)
 
+		metrics.ActiveChats.Dec()
+
 		// Cleanup.
 		_ = natsClient.UnsubscribeFromChat(sid)
+		_ = natsClient.UnsubscribeModerationResult(sid) // MOD-2: Stop async moderation results.
 		chatStore.Delete(ctx, chatID)
 		sessionStore.ClearChatID(ctx, sid)
+		msgBuffer.Remove(chatID) // MOD-6: Clean up message buffer.
 
 		log.Printf("end_chat from session=%s chat=%s", sid, chatID)
 	})
 
 	// -----------------------------------------------------------------------
-	// report — placeholder (Sprint 7+)
+	// report — report a chat partner for abuse (ABUSE-6)
 	// -----------------------------------------------------------------------
 	dispatcher.Register(protocol.TypeReport, func(conn *ws.Connection, msg interface{}) {
-		log.Printf("report from session=%s", conn.ID)
+		reportMsg, ok := msg.(protocol.ReportMsg)
+		if !ok {
+			return
+		}
+		sid := conn.ID
+		ctx := context.Background()
+
+		// Look up the chat to identify the partner.
+		cs, err := chatStore.Get(ctx, reportMsg.ChatID)
+		if err != nil || cs == nil || !cs.IsParticipant(sid) {
+			log.Printf("[report] invalid chat session=%s chat=%s", sid, reportMsg.ChatID)
+			return
+		}
+
+		partnerID := cs.GetPartner(sid)
+		if partnerID == "" {
+			return
+		}
+
+		// Resolve the partner's fingerprint so we can track reports
+		// against it.
+		partnerSession, err := sessionStore.Get(ctx, partnerID)
+		if err != nil || partnerSession == nil || partnerSession.Fingerprint == "" {
+			log.Printf("[report] partner session not found or missing fingerprint session=%s partner=%s", sid, partnerID)
+			return
+		}
+
+		// Resolve the reporter's fingerprint for the PostgreSQL record.
+		reporterFP := ""
+		reporterSession, err := sessionStore.Get(ctx, sid)
+		if err == nil && reporterSession != nil {
+			reporterFP = reporterSession.Fingerprint
+		}
+
+		// MOD-6: Capture buffered messages for the report.
+		buffered := msgBuffer.Get(reportMsg.ChatID)
+		reportMessages := make([]report.MessageEntry, len(buffered))
+		for i, bm := range buffered {
+			reportMessages[i] = report.MessageEntry{
+				From: bm.From,
+				Text: bm.Text,
+				Ts:   bm.Ts,
+			}
+		}
+
+		// Store the report in PostgreSQL (if reporter fingerprint is available).
+		if reporterFP != "" {
+			r := &report.Report{
+				ReporterFingerprint: reporterFP,
+				ReportedFingerprint: partnerSession.Fingerprint,
+				ChatID:              reportMsg.ChatID,
+				Reason:              reportMsg.Reason,
+				Messages:            reportMessages,
+			}
+			if err := reportStore.Create(ctx, r); err != nil {
+				log.Printf("[report] failed to store in postgres: %v", err)
+				// Continue — ban logic should still run even if PG write fails.
+			}
+		} else {
+			log.Printf("[report] reporter fingerprint empty, skipping postgres store session=%s", sid)
+		}
+
+		// Track the report and check for auto-ban (3 reports in 24h).
+		banned, duration, err := banStore.ReportAndCheck(ctx, partnerSession.Fingerprint, reportMsg.Reason)
+		if err != nil {
+			log.Printf("[report] error tracking report: %v", err)
+			// Fail open — the report was not counted, but don't crash.
+			return
+		}
+
+		if banned {
+			// Notify the banned user if they are still connected.
+			resp, _ := protocol.NewServerMessage(protocol.TypeBanned, protocol.BannedMsg{
+				Duration: int(duration.Seconds()),
+				Reason:   "multiple_reports",
+			})
+			server.SendMessage(partnerID, resp)
+
+			// Disconnect the banned user.
+			if partnerConn := server.Connections().Get(partnerID); partnerConn != nil {
+				server.RemoveConnection(partnerConn)
+			}
+		}
+
+		// ABUSE-8: PostgreSQL cross-check — catch bans that Redis missed
+		// (e.g. after a Redis restart that lost counters).
+		if !banned {
+			pgCount, pgErr := reportStore.CountRecent(ctx, partnerSession.Fingerprint, 24*time.Hour)
+			if pgErr != nil {
+				log.Printf("[report] pg cross-check failed fp=%s: %v", partnerSession.Fingerprint, pgErr)
+				// Fail open — don't crash, just skip the PG check.
+			} else if pgCount >= ban.AutoBanThreshold {
+				log.Printf("[report] pg cross-check triggered ban fp=%s pg_count=%d (redis missed)", partnerSession.Fingerprint, pgCount)
+				pgDuration, escErr := banStore.Escalate(ctx, partnerSession.Fingerprint, "multiple_reports")
+				if escErr != nil {
+					log.Printf("[report] pg cross-check escalate failed fp=%s: %v", partnerSession.Fingerprint, escErr)
+				} else {
+					banned = true
+
+					// Notify the banned user if they are still connected.
+					resp, _ := protocol.NewServerMessage(protocol.TypeBanned, protocol.BannedMsg{
+						Duration: int(pgDuration.Seconds()),
+						Reason:   "multiple_reports",
+					})
+					server.SendMessage(partnerID, resp)
+
+					// Disconnect the banned user.
+					if partnerConn := server.Connections().Get(partnerID); partnerConn != nil {
+						server.RemoveConnection(partnerConn)
+					}
+				}
+			}
+		}
+
+		log.Printf("[report] session=%s reported partner=%s fp=%s reason=%s banned=%v",
+			sid, partnerID, partnerSession.Fingerprint, reportMsg.Reason, banned)
 	})
 
 	server = ws.NewServer(config, sessionStore, dispatcher.Dispatch)
@@ -464,8 +764,10 @@ func main() {
 				data, _ := json.Marshal(event)
 				natsClient.PublishChatMessage(sess.ChatID, data)
 				_ = natsClient.UnsubscribeFromChat(connID)
+				_ = natsClient.UnsubscribeModerationResult(connID) // MOD-2: Stop async moderation results.
 				chatStore.Delete(ctx, sess.ChatID)
 			}
+			msgBuffer.Remove(sess.ChatID) // MOD-2/MOD-6: Clean up message buffer.
 		}
 
 		log.Printf("disconnect cleanup for session=%s status=%s", connID, sess.Status)
@@ -484,6 +786,9 @@ func main() {
 		}
 		if err := sessionStore.Close(); err != nil {
 			log.Printf("session store close error: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			log.Printf("database close error: %v", err)
 		}
 		os.Exit(0)
 	}()

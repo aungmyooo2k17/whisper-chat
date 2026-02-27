@@ -9,5 +9,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /wsserver ./cmd/wsserv
 # Stage 2: Run
 FROM scratch
 COPY --from=builder /wsserver /wsserver
+COPY --from=builder /app/migrations /migrations
 EXPOSE 8080
 ENTRYPOINT ["/wsserver"]

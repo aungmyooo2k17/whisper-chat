@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { app } from '$lib/stores.svelte';
+	import ReportDialog from './ReportDialog.svelte';
+	import RateLimitToast from './RateLimitToast.svelte';
 
 	let inputText = $state('');
+	let showReportDialog = $state(false);
 	let messagesEl: HTMLDivElement | undefined = $state();
 	let typingTimeout: ReturnType<typeof setTimeout> | null = null;
 	let isTyping = $state(false);
@@ -68,9 +71,14 @@
 				<span class="shared-count">{app.sharedInterests.length} shared</span>
 			{/if}
 		</div>
-		<button class="end-btn" onclick={() => app.endChat()}>
-			End Chat
-		</button>
+		<div class="header-actions">
+			<button class="report-btn" onclick={() => (showReportDialog = true)}>
+				Report
+			</button>
+			<button class="end-btn" onclick={() => app.endChat()}>
+				End Chat
+			</button>
+		</div>
 	</header>
 
 	{#if app.sharedInterests.length > 0}
@@ -80,6 +88,10 @@
 			{/each}
 		</div>
 	{/if}
+
+	<div class="rate-limit-area">
+		<RateLimitToast />
+	</div>
 
 	<div class="messages" bind:this={messagesEl}>
 		{#if app.messages.length === 0}
@@ -126,6 +138,10 @@
 			Send
 		</button>
 	</div>
+
+	{#if showReportDialog}
+		<ReportDialog onClose={() => (showReportDialog = false)} />
+	{/if}
 </div>
 
 <style>
@@ -191,6 +207,29 @@
 		border-color: rgba(255, 107, 107, 0.5);
 	}
 
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.report-btn {
+		padding: 0.4rem 0.75rem;
+		font-size: 0.75rem;
+		font-weight: 500;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--color-border);
+		background: transparent;
+		color: var(--color-text-dimmed);
+		transition: all var(--transition-fast);
+	}
+
+	.report-btn:hover {
+		border-color: var(--color-border-hover);
+		color: var(--color-text-muted);
+		background: var(--color-bg-hover);
+	}
+
 	/* Shared interests bar */
 	.shared-bar {
 		display: flex;
@@ -210,6 +249,20 @@
 		color: var(--color-accent);
 		white-space: nowrap;
 		flex-shrink: 0;
+	}
+
+	/* Rate limit toast area */
+	.rate-limit-area {
+		flex-shrink: 0;
+		padding: 0 1.25rem;
+	}
+
+	.rate-limit-area:empty {
+		display: none;
+	}
+
+	.rate-limit-area:has(> :global(*)) {
+		padding-top: 0.5rem;
 	}
 
 	/* Messages area */

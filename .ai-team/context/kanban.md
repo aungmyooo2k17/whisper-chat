@@ -1,6 +1,6 @@
 # Project Kanban -- Whisper (Anonymous Real-Time Chat)
 
-> Last updated: 2026-02-28 (Sprint 6 complete, BUG-1 fixed)
+> Last updated: 2026-02-28 (Sprint 10 complete)
 > Target: 1,000,000 concurrent WebSocket connections
 > Environment: Local development via Docker Compose
 > Epics: 9 | Total tasks: 80 | MVP tasks: 41 | First release tasks: 73
@@ -209,12 +209,7 @@
 
 > Tasks with no blockers or whose blockers are all Done.
 
-- [ ] **MATCH-4** [feature][M] Tier 3/4 matching (single-interest + random)
-- [ ] **SETUP-11** [infra][S] PostgreSQL migrations (abuse_reports table)
-- [ ] **ABUSE-1** [security][M] Rate limiting middleware
-- [ ] **ABUSE-2** [security][M] Keyword blocklist filter
-- [ ] **ABUSE-10** [security][S] WebSocket frame size limit
-- [ ] **LOAD-1** [infra][S] Research WebSocket load testing tools
+_(empty — Sprint 11 tasks LOAD-7 and LOAD-8 are next)_
 
 ---
 
@@ -275,6 +270,34 @@ _(empty)_
   - Fix 2: Cleared stale `WriteDeadline` after `SendMessage` to prevent heartbeat ping write failures
   - Fix 3: Treated read timeouts from stale epoll dispatches as harmless (return, don't `RemoveConnection`)
   - Also: Bypassed Vite proxy via `VITE_WS_URL`, improved Vite proxy config, bumped Dockerfiles to Go 1.24
+- [x] **SETUP-11** [infra][S] PostgreSQL migrations — abuse_reports table (Sprint 7)
+- [x] **ABUSE-10** [security][S] WebSocket frame size limit — 4KB max enforcement (Sprint 7)
+- [x] **ABUSE-1** [security][M] Rate limiting middleware — Redis INCR+EXPIRE, 5msg/10s, 10match/min (Sprint 7)
+- [x] **ABUSE-2** [security][M] Keyword blocklist filter — ~120 terms, leetspeak detection, < 0.005ms (Sprint 7)
+- [x] **ABUSE-3** [security][S] Regex spam detection — URLs, phone numbers, char/word flooding (Sprint 7)
+- [x] **ABUSE-4** [security][M] FingerprintJS integration — frontend + set_fingerprint protocol (Sprint 7)
+- [x] **ABUSE-5** [security][S] Fingerprint-based ban check — reject banned users on connect (Sprint 7)
+- [x] **ABUSE-6** [security][M] Escalating ban system — 15min → 1h → 24h, auto-ban at 3 reports (Sprint 7)
+- [x] **ABUSE-7** [security][M] User reporting flow — PostgreSQL storage, report handler with message context (Sprint 8)
+- [x] **ABUSE-8** [security][S] Auto-ban trigger — Redis + PostgreSQL dual-layer detection, 3 reports in 24h (Sprint 8)
+- [x] **MOD-1** [feature][S] Moderation service scaffold — NATS + Redis + content filter (Sprint 8)
+- [x] **MOD-2** [feature][M] NATS async moderation — publish to moderation.check, subscribe to results, content_warning on flag (Sprint 8)
+- [x] **MOD-6** [feature][S] In-memory message ring buffer — 5 msgs per chat, goroutine-safe (Sprint 8)
+- [x] **FE-6** [feature][S] Report dialog — 4 reason options, submit confirmation, auto-close (Sprint 8)
+- [x] **FE-9** [feature][S] Banned screen with countdown + rate-limit toast (Sprint 8)
+- [x] **FE-12** [feature][S] Terms of service / community guidelines on landing page (Sprint 8)
+- [x] **MATCH-4** [feature][M] Tier 3/4 matching — single-interest fallback (20-25s) + random matching (25-30s) (Sprint 9)
+- [x] **FE-11** [feature][S] "Users online" counter — polls /api/online, green dot with count (Sprint 9)
+- [x] **SETUP-8** [infra][M] Prometheus + Grafana — 6 metrics, pre-configured dashboard, Docker Compose (Sprint 9)
+- [x] **SETUP-9** [infra][S] Kernel tuning scripts — sysctl.conf, limits.conf, tune-kernel.sh for 1M connections (Sprint 9)
+- [x] **SETUP-5** [infra][S] Frontend Dockerfile — multi-stage node + nginx, SPA routing, gzip, security headers (Sprint 9)
+- [x] **WS-7** [feature][M] Graceful shutdown — drain flag, 30s timeout, partner notifications, phased close (Sprint 9)
+- [x] **LOAD-1** [infra][S] Custom Go load test client — gobwas/ws based, reusable client + stats packages (Sprint 10)
+- [x] **LOAD-5** [infra][S] Kernel tuning for load test client — sysctl, limits, tune-client.sh (Sprint 10)
+- [x] **LOAD-2** [infra][M] Connection saturation test — ramp-up, hold, progress reporting, signal handling (Sprint 10)
+- [x] **LOAD-6** [infra][M] Metrics collection — Prometheus scraper, Grafana load test dashboard (Sprint 10)
+- [x] **LOAD-3** [infra][M] Matching flow load test — connect all, batch find_match, accept_match, latency tracking (Sprint 10)
+- [x] **LOAD-4** [infra][L] Full chat lifecycle load test — connect → match → chat messages → end_chat (Sprint 10)
 
 ---
 
@@ -467,16 +490,16 @@ Sprints 1-3:   Foundation       ✅ DONE (17 tasks)
 Sprint 4:      Matching         ✅ DONE (6 tasks)
 Sprint 5:      Chat backend     ✅ DONE (7 tasks)
 Sprint 6:      Frontend + MVP   ✅ DONE (8 tasks)
-Sprint 7:      Abuse prevention  8 tasks
-Sprint 8:      Reporting + mod   8 tasks
-Sprint 9:      Polish + monitor  6 tasks
-Sprint 10:     Load testing      6 tasks
+Sprint 7:      Abuse prevention ✅ DONE (8 tasks)
+Sprint 8:      Reporting + mod  ✅ DONE (8 tasks)
+Sprint 9:      Polish + monitor ✅ DONE (6 tasks)
+Sprint 10:     Load testing     ✅ DONE (6 tasks)
 Sprint 11:     Scale testing     2 tasks
 Sprint 12:     Release prep      5 tasks
 Sprint 13:     Ship it           3 tasks
 ────────────────────────────────────────
 Total:         13 sprints, 76 tasks (+ 4 skipped for v2)
-               38 done, 38 remaining
+               66 done, 10 remaining
 ```
 
 **Tasks deferred to v2.0** (not needed for first release):

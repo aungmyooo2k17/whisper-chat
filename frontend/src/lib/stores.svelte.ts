@@ -7,7 +7,9 @@ import type {
 	MatchTimeoutMsg,
 	ServerChatMsg,
 	ServerTypingMsg,
-	PartnerLeftMsg
+	PartnerLeftMsg,
+	BannedMsg,
+	RateLimitedMsg
 } from './websocket.svelte';
 
 // Determine WebSocket URL based on environment
@@ -18,7 +20,7 @@ const wsUrl =
 export const ws = new WebSocketClient(wsUrl);
 
 // App screens matching the user journey
-export type AppScreen = 'idle' | 'matching' | 'match_found' | 'chatting' | 'chat_ended';
+export type AppScreen = 'idle' | 'matching' | 'match_found' | 'chatting' | 'chat_ended' | 'banned';
 
 export interface ChatMessage {
 	from: 'me' | 'partner';
@@ -39,6 +41,11 @@ export class AppState {
 	messages = $state<ChatMessage[]>([]);
 	partnerTyping = $state(false);
 	partnerLeft = $state(false);
+	isBanned = $state(false);
+	banDuration = $state(0);
+	banReason = $state('');
+	isRateLimited = $state(false);
+	rateLimitRetryAfter = $state(0);
 
 	private unsubs: (() => void)[] = [];
 
@@ -91,6 +98,22 @@ export class AppState {
 			ws.on<PartnerLeftMsg>('partner_left', () => {
 				this.partnerLeft = true;
 				this.screen = 'chat_ended';
+			}),
+
+			ws.on<BannedMsg>('banned', (msg) => {
+				this.isBanned = true;
+				this.banDuration = msg.duration;
+				this.banReason = msg.reason;
+				this.screen = 'banned';
+			}),
+
+			ws.on<RateLimitedMsg>('rate_limited', (msg) => {
+				this.isRateLimited = true;
+				this.rateLimitRetryAfter = msg.retry_after;
+				setTimeout(() => {
+					this.isRateLimited = false;
+					this.rateLimitRetryAfter = 0;
+				}, msg.retry_after * 1000);
 			})
 		);
 	}

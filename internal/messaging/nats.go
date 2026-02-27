@@ -19,7 +19,8 @@ const (
 	SubjectMatchFound   = "match.found"      // + .<session_id>
 	SubjectMatchNotify  = "match.notify"     // + .<session_id> (lifecycle events)
 	SubjectChat         = "chat"             // + .<chat_id>
-	SubjectModeration   = "moderation.check"
+	SubjectModeration       = "moderation.check"
+	SubjectModerationResult = "moderation.result"  // + .<session_id>
 )
 
 // NATSClient wraps the NATS connection with helper methods for pub/sub.
@@ -188,6 +189,36 @@ func (c *NATSClient) UnsubscribeMatchNotify(sessionID string) error {
 // PublishMatchNotify publishes a match lifecycle notification to a session.
 func (c *NATSClient) PublishMatchNotify(sessionID string, data []byte) error {
 	return c.Publish(SubjectMatchNotify+"."+sessionID, data)
+}
+
+// PublishModerationRequest publishes a moderation check request.
+func (c *NATSClient) PublishModerationRequest(data []byte) error {
+	return c.Publish(SubjectModeration, data)
+}
+
+// SubscribeModerationCheck subscribes to moderation check requests.
+func (c *NATSClient) SubscribeModerationCheck(handler func(data []byte)) error {
+	return c.Subscribe(SubjectModeration, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+}
+
+// PublishModerationResult publishes a moderation result for a specific session.
+func (c *NATSClient) PublishModerationResult(sessionID string, data []byte) error {
+	return c.Publish(SubjectModerationResult+"."+sessionID, data)
+}
+
+// SubscribeModerationResult subscribes to moderation results for a specific session.
+func (c *NATSClient) SubscribeModerationResult(sessionID string, handler func(data []byte)) error {
+	subject := SubjectModerationResult + "." + sessionID
+	return c.Subscribe(subject, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+}
+
+// UnsubscribeModerationResult unsubscribes from moderation results for a session.
+func (c *NATSClient) UnsubscribeModerationResult(sessionID string) error {
+	return c.unsubscribe(SubjectModerationResult + "." + sessionID)
 }
 
 // Close drains all active subscriptions and closes the NATS connection.

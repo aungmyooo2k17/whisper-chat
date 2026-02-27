@@ -5,8 +5,11 @@
 	import MatchFoundScreen from '$lib/components/MatchFoundScreen.svelte';
 	import ChatScreen from '$lib/components/ChatScreen.svelte';
 	import ChatEndedScreen from '$lib/components/ChatEndedScreen.svelte';
+	import BannedScreen from '$lib/components/BannedScreen.svelte';
+	import OnlineCounter from '$lib/components/OnlineCounter.svelte';
 
 	let selectedTags: Set<string> = $state(new Set());
+	let showGuidelines: boolean = $state(false);
 
 	let selectedCount = $derived(selectedTags.size);
 	let isMaxSelected = $derived(selectedCount >= MAX_INTERESTS);
@@ -41,7 +44,9 @@
 	<meta name="description" content="Anonymous real-time chat with people who share your interests" />
 </svelte:head>
 
-{#if app.screen === 'matching'}
+{#if app.screen === 'banned'}
+	<BannedScreen />
+{:else if app.screen === 'matching'}
 	<MatchingScreen />
 {:else if app.screen === 'match_found'}
 	<MatchFoundScreen />
@@ -55,6 +60,7 @@
 		<header class="hero">
 			<h1 class="logo">Whisper</h1>
 			<p class="tagline">Anonymous real-time chat with people who share your interests</p>
+			<OnlineCounter />
 		</header>
 
 		<section class="interests-section">
@@ -89,6 +95,37 @@
 					</div>
 				{/each}
 			</div>
+		</section>
+
+		<section class="guidelines-section">
+			<button class="guidelines-toggle" onclick={() => showGuidelines = !showGuidelines}>
+				<span class="guidelines-toggle-label">Community Guidelines & Terms</span>
+				<span class="toggle-icon">{showGuidelines ? '\u2212' : '+'}</span>
+			</button>
+			{#if showGuidelines}
+				<div class="guidelines-content">
+					<div class="guidelines-block">
+						<h4 class="guidelines-heading">Community Guidelines</h4>
+						<ul class="guidelines-list">
+							<li>Be respectful and kind</li>
+							<li>No harassment, hate speech, or bullying</li>
+							<li>No spam, advertising, or self-promotion</li>
+							<li>No sharing of personal information (yours or others')</li>
+							<li>No explicit or illegal content</li>
+							<li>Report violations using the in-chat report button</li>
+						</ul>
+					</div>
+					<div class="guidelines-block">
+						<h4 class="guidelines-heading">Terms of Use</h4>
+						<ul class="guidelines-list">
+							<li>By using Whisper, you agree to these guidelines</li>
+							<li>Messages are not stored &mdash; conversations are ephemeral</li>
+							<li>Violations may result in temporary bans</li>
+							<li>We reserve the right to moderate content</li>
+						</ul>
+					</div>
+				</div>
+			{/if}
 		</section>
 
 		<div class="action-bar">
@@ -243,6 +280,93 @@
 
 	.tag-dimmed {
 		opacity: 0.35;
+	}
+
+	/* --- Guidelines Section --- */
+	.guidelines-section {
+		margin-top: 1.5rem;
+	}
+
+	.guidelines-toggle {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.75rem 1.25rem;
+		font-size: 0.85rem;
+		font-weight: 500;
+		color: var(--color-text-dimmed);
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-lg);
+		transition: all var(--transition-fast);
+		cursor: pointer;
+	}
+
+	.guidelines-toggle:hover {
+		color: var(--color-text-muted);
+		border-color: var(--color-border-hover);
+	}
+
+	.guidelines-toggle-label {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.toggle-icon {
+		font-size: 1rem;
+		line-height: 1;
+		opacity: 0.6;
+	}
+
+	.guidelines-content {
+		margin-top: 0.5rem;
+		padding: 1rem 1.25rem;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-lg);
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+
+	.guidelines-block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+
+	.guidelines-heading {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: var(--color-text-muted);
+		margin-bottom: 0.15rem;
+	}
+
+	.guidelines-list {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+	}
+
+	.guidelines-list li {
+		font-size: 0.78rem;
+		color: var(--color-text-dimmed);
+		line-height: 1.45;
+		padding-left: 1rem;
+		position: relative;
+	}
+
+	.guidelines-list li::before {
+		content: '\2022';
+		position: absolute;
+		left: 0;
+		color: var(--color-text-dimmed);
+		opacity: 0.5;
 	}
 
 	/* --- Action Bar --- */

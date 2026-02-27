@@ -15,7 +15,9 @@ import (
 const (
 	matchInterval = 2 * time.Second
 	tier1MaxWait  = 10 * time.Second // 0-10s: exact match only
-	matchTimeout  = 30 * time.Second // 30s: give up
+	tier2MaxWait  = 20 * time.Second // 10-20s: overlap matching
+	tier3MaxWait  = 25 * time.Second // 20-25s: single-interest fallback
+	matchTimeout  = 30 * time.Second // 25-30s: random matching, then give up
 )
 
 // MatchRequest is the NATS payload sent by wsserver when a user starts matching.
@@ -170,7 +172,21 @@ func (s *Service) processQueue() {
 			}
 		}
 
-		// Tier 3 & 4 deferred to MATCH-4.
+		// Tier 3: Single-interest fallback (after 20s wait).
+		if match == nil && waitDuration >= tier2MaxWait {
+			match, err = s.queue.TrySingleInterestMatch(ctx, sid)
+			if err != nil {
+				log.Printf("[matcher] single-interest match error for %s: %v", sid, err)
+			}
+		}
+
+		// Tier 4: Random matching (after 25s wait).
+		if match == nil && waitDuration >= tier3MaxWait {
+			match, err = s.queue.TryRandomMatch(ctx, sid)
+			if err != nil {
+				log.Printf("[matcher] random match error for %s: %v", sid, err)
+			}
+		}
 
 		if match != nil {
 			s.handleMatch(ctx, match)

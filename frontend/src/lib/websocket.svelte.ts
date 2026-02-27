@@ -1,8 +1,11 @@
+import { getFingerprint } from './fingerprint';
+
 // WebSocket connection states
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 // Message types matching the Go protocol
 export type MessageType =
+	| 'set_fingerprint'
 	| 'find_match'
 	| 'cancel_match'
 	| 'accept_match'
@@ -127,9 +130,10 @@ export class WebSocketClient {
 	constructor(url: string) {
 		this.url = url;
 
-		// Internal handler: capture session_id on session_created
+		// Internal handler: capture session_id on session_created, then send fingerprint.
 		this.on<SessionCreatedMsg>('session_created', (msg) => {
 			this._sessionId = msg.session_id;
+			this.sendFingerprint();
 		});
 	}
 
@@ -215,6 +219,13 @@ export class WebSocketClient {
 	}
 
 	// ----- Convenience methods for client messages -----
+
+	/** Send browser fingerprint to the server for ban enforcement. */
+	private sendFingerprint(): void {
+		getFingerprint().then((fingerprint) => {
+			this.send({ type: 'set_fingerprint', fingerprint });
+		});
+	}
 
 	findMatch(interests: string[]): void {
 		this.send({ type: 'find_match', interests });

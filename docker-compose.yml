@@ -69,10 +69,13 @@ services:
       - LISTEN_ADDR=:8080
       - REDIS_ADDR=redis:6379
       - NATS_URL=nats://nats:4222
+      - DATABASE_URL=postgres://whisper:whisper_dev@postgres:5432/whisper?sslmode=disable
     depends_on:
       redis:
         condition: service_healthy
       nats:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - whisper-net
@@ -107,9 +110,53 @@ services:
     networks:
       - whisper-net
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_WS_URL: "ws://localhost:8080/ws"
+        VITE_API_URL: "http://localhost:8080"
+    ports:
+      - "3000:80"
+    depends_on:
+      - wsserver
+    networks:
+      - whisper-net
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - wsserver
+    networks:
+      - whisper-net
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=whisper
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - whisper-net
+
 volumes:
   redis-data:
   postgres-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   whisper-net:

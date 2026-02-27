@@ -19,6 +19,7 @@ import (
 	"github.com/gobwas/ws/wsutil"
 	"github.com/google/uuid"
 
+	"github.com/whisper/chat-app/internal/metrics"
 	"github.com/whisper/chat-app/internal/protocol"
 	"github.com/whisper/chat-app/internal/session"
 )
@@ -30,6 +31,7 @@ type ServerConfig struct {
 	MaxConnections int           // hard cap on total connections
 	ReadTimeout    time.Duration // timeout for WebSocket read operations
 	WriteTimeout   time.Duration // timeout for WebSocket write operations
+	MaxFrameSize   int64         // maximum allowed WebSocket frame payload in bytes
 }
 
 // DefaultServerConfig returns a ServerConfig with sensible production defaults.
@@ -40,6 +42,7 @@ func DefaultServerConfig() ServerConfig {
 		MaxConnections: 100000,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
+		MaxFrameSize:   4096,
 	}
 }
 
@@ -58,7 +61,8 @@ type Server struct {
 	httpServer   *http.Server
 	bufPool      sync.Pool // pool of reusable read buffers
 	done         chan struct{}
-	startedAt    time.Time // server start time for uptime calculation
+	startedAt    time.Time    // server start time for uptime calculation
+	draining     atomic.Bool  // true when server is draining connections during shutdown
 }
 
 // NewServer creates a Server with the given configuration, session store, and
@@ -98,6 +102,8 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleUpgrade)
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/api/online", s.handleOnlineCount)
+	mux.Handle("/metrics", metrics.Handler())
 
 	s.httpServer = &http.Server{
 		Addr:    s.config.ListenAddr,
@@ -123,6 +129,12 @@ func (s *Server) Start() error {
 // gobwas/ws zero-copy upgrader. On success it creates a Connection, registers
 // it with the connection manager and epoll instance.
 func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
+	// Reject new connections during graceful shutdown drain.
+	if s.draining.Load() {
+		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
+
 	// Enforce maximum connection limit.
 	if s.conns.Count() >= s.config.MaxConnections {
 		http.Error(w, "too many connections", http.StatusServiceUnavailable)
@@ -149,6 +161,7 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	// Register the connection in the manager and epoll.
 	s.conns.Add(c)
+	metrics.ConnectionsTotal.Set(float64(s.conns.Count()))
 	if err := s.epoll.Add(conn); err != nil {
 		log.Printf("ws: epoll add failed for session %s: %v", sessionID, err)
 		s.conns.Remove(sessionID)
@@ -194,6 +207,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleOnlineCount returns the current number of connected users as JSON.
+// This lightweight endpoint is polled by the frontend to display the online
+// user count on the landing page.
+func (s *Server) handleOnlineCount(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
+
+	_ = json.NewEncoder(w).Encode(struct {
+		Count int `json:"count"`
+	}{Count: s.conns.Count()})
 }
 
 // startEventLoop runs the epoll wait loop. For each batch of ready
@@ -283,6 +309,25 @@ func (s *Server) handleConn(netConn net.Conn) {
 		return
 	}
 
+	// Reject oversized frames before reading the payload.
+	if s.config.MaxFrameSize > 0 && header.Length > s.config.MaxFrameSize {
+		log.Printf("ws: frame too large from session=%s: %d bytes (max %d)",
+			c.ID, header.Length, s.config.MaxFrameSize)
+
+		// Drain the reader so the connection stays usable for subsequent frames.
+		_, _ = io.Copy(io.Discard, reader)
+
+		// Send an error back to the client.
+		errMsg, marshalErr := protocol.NewServerMessage(protocol.TypeError, protocol.ErrorMsg{
+			Code:    "frame_too_large",
+			Message: "Message exceeds 4KB limit",
+		})
+		if marshalErr == nil {
+			_ = c.WriteMessage(errMsg)
+		}
+		return
+	}
+
 	// Read data frame payload.
 	data := make([]byte, header.Length)
 	if header.Length > 0 {
@@ -321,6 +366,7 @@ func (s *Server) RemoveConnection(c *Connection) {
 	if !s.conns.Remove(c.ID) {
 		return
 	}
+	metrics.ConnectionsTotal.Set(float64(s.conns.Count()))
 
 	// Notify application layer before deleting session.
 	if s.onDisconnect != nil {
@@ -371,23 +417,61 @@ func (s *Server) SessionStore() *session.Store {
 	return s.sessionStore
 }
 
-// Shutdown performs a graceful shutdown of the server. It stops the HTTP
-// listener, signals the event loop to exit, closes all active connections,
-// and cleans up the epoll instance.
+// Shutdown performs a graceful shutdown of the server. It first stops
+// accepting new connections, then drains existing connections with a
+// 30-second timeout before force-closing any that remain.
 func (s *Server) Shutdown() error {
-	log.Println("ws: shutting down server...")
+	log.Println("ws: initiating graceful shutdown...")
 
-	// Signal the event loop to stop.
-	close(s.done)
+	// Phase 1: Stop accepting new connections.
+	s.draining.Store(true)
 
-	// Stop accepting new HTTP connections with a deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := s.httpServer.Shutdown(ctx); err != nil {
+	// Stop the HTTP listener (no new upgrades).
+	httpCtx, httpCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer httpCancel()
+	if err := s.httpServer.Shutdown(httpCtx); err != nil {
 		log.Printf("ws: http shutdown error: %v", err)
 	}
 
-	// Delete all sessions from Redis and close all active WebSocket connections.
+	// Phase 2: Notify all connected clients that the server is shutting down.
+	// The onDisconnect callback triggers partner_left notifications so paired
+	// users know their partner is gone before the TCP socket closes.
+	connCount := s.conns.Count()
+	log.Printf("ws: draining %d connections (30s timeout)...", connCount)
+
+	for _, c := range s.conns.All() {
+		if s.onDisconnect != nil {
+			s.onDisconnect(c.ID)
+		}
+	}
+
+	// Phase 3: Wait for connections to close gracefully, up to 30 seconds.
+	drainDeadline := time.After(30 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+drainLoop:
+	for {
+		select {
+		case <-drainDeadline:
+			remaining := s.conns.Count()
+			if remaining > 0 {
+				log.Printf("ws: drain timeout, force-closing %d connections", remaining)
+			}
+			break drainLoop
+		case <-ticker.C:
+			remaining := s.conns.Count()
+			if remaining == 0 {
+				log.Println("ws: all connections drained successfully")
+				break drainLoop
+			}
+			log.Printf("ws: draining... %d connections remaining", remaining)
+		}
+	}
+
+	// Phase 4: Force-close any remaining connections.
+	close(s.done) // Stop the event loop.
+
 	for _, c := range s.conns.All() {
 		if s.sessionStore != nil {
 			delCtx, delCancel := context.WithTimeout(context.Background(), 2*time.Second)
