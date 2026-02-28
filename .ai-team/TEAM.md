@@ -26,6 +26,7 @@ You have access to these specialists (spawn them using the Task tool with `subag
 | SEO Specialist | `.ai-team/agents/seo-specialist.md` | Technical SEO, GSC analysis, schema markup, Core Web Vitals |
 | Content Strategist | `.ai-team/agents/content-strategist.md` | Blog writing, GEO optimization, content strategy |
 | Troubleshooter | `.ai-team/agents/troubleshooter.md` | Problem diagnosis, debugging, root cause analysis |
+| Teacher | `.ai-team/agents/teacher.md` | Explain concepts, teach technologies, answer "how/why" questions |
 
 ## How to Spawn Agents
 
